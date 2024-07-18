@@ -3,140 +3,254 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Black Hole Gravitational Lensing</title>
+    <title>Fixed Customizable 3D Black Hole Photon Simulation</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/dat-gui/0.7.7/dat.gui.min.js"></script>
     <style>
         body { margin: 0; overflow: hidden; background-color: #000; }
+        #info {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            color: white;
+            font-family: Arial, sans-serif;
+            font-size: 14px;
+            background: rgba(0,0,0,0.5);
+            padding: 10px;
+            border-radius: 5px;
+        }
     </style>
 </head>
 <body>
-<script id="vertexShader" type="x-shader/x-vertex">
-    attribute float size;
-    varying vec3 vColor;
-    uniform float time;
-    uniform float blackHoleStrength;
-    uniform vec2 blackHolePosition;
-
-    void main() {
-        vColor = color;
-        vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
-
-        // Calculate distance to black hole
-        vec2 toBlackHole = blackHolePosition - mvPosition.xy;
-        float dist = length(toBlackHole);
-
-        // Apply gravitational lensing effect
-        float strength = blackHoleStrength / (dist * dist + 0.1);
-        mvPosition.xy += normalize(toBlackHole) * strength;
-
-        gl_PointSize = size * (300.0 / -mvPosition.z);
-        gl_Position = projectionMatrix * mvPosition;
-    }
-</script>
-<script id="fragmentShader" type="x-shader/x-fragment">
-    varying vec3 vColor;
-    void main() {
-        if (length(gl_PointCoord - vec2(0.5, 0.5)) > 0.475) discard;
-        gl_FragColor = vec4(vColor, 1.0);
-    }
-</script>
-<script>
-    let scene, camera, renderer, particles, blackHoleMesh;
-    let gui, params;
-
-    function init() {
-        scene = new THREE.Scene();
-        camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
-        camera.position.z = 50;
-
-        renderer = new THREE.WebGLRenderer();
-        renderer.setSize(window.innerWidth, window.innerHeight);
-        document.body.appendChild(renderer.domElement);
-
-        params = {
+    <div id="info">
+        <h2>3D Black Hole Photon Simulation</h2>
+        <p>Use the controls to customize the simulation.</p>
+    </div>
+    <script>
+        let scene, camera, renderer, blackHole, photons, stars;
+        const params = {
+            photonCount: 3000,
+            blackHoleRadius: 5,
+            orbitRadius: 15,
             starCount: 10000,
-            blackHoleStrength: 20,
-            blackHoleX: 0,
-            blackHoleY: 0
+            cameraDistance: 100,
+            cameraSpeed: 0.0005,
+            gravitationalStrength: 100,
+            fallingPhotonColor: '#ff0000',
+            orbitingPhotonColor: '#ffff00',
+            escapingPhotonColor: '#0000ff',
+            starColor: '#ffffff',
+            showBlackHole: true
         };
 
-        createStars();
-        createBlackHoleIndicator();
-        setupGUI();
-        animate();
-    }
+        function init() {
+            scene = new THREE.Scene();
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+            camera.position.z = params.cameraDistance;
 
-    function createStars() {
-        const geometry = new THREE.BufferGeometry();
-        const positions = [];
-        const colors = [];
-        const sizes = [];
+            renderer = new THREE.WebGLRenderer();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            document.body.appendChild(renderer.domElement);
 
-        for (let i = 0; i < params.starCount; i++) {
-            positions.push((Math.random() - 0.5) * 100);
-            positions.push((Math.random() - 0.5) * 100);
-            positions.push((Math.random() - 0.5) * 100);
+            createBlackHole();
+            createPhotons();
+            createStars();
+            setupGUI();
 
-            colors.push(Math.random() * 0.5 + 0.5);
-            colors.push(Math.random() * 0.5 + 0.5);
-            colors.push(Math.random() * 0.5 + 0.5);
-
-            sizes.push(Math.random() * 2 + 1);
+            animate();
         }
 
-        geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
-        geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
-        geometry.setAttribute('size', new THREE.Float32BufferAttribute(sizes, 1));
+        function createBlackHole() {
+            const blackHoleGeometry = new THREE.SphereGeometry(params.blackHoleRadius, 32, 32);
+            const blackHoleMaterial = new THREE.MeshBasicMaterial({ color: 0x000000 });
+            blackHole = new THREE.Mesh(blackHoleGeometry, blackHoleMaterial);
+            scene.add(blackHole);
+        }
 
-        const material = new THREE.ShaderMaterial({
-            uniforms: {
-                time: { value: 0 },
-                blackHoleStrength: { value: params.blackHoleStrength },
-                blackHolePosition: { value: new THREE.Vector2(params.blackHoleX, params.blackHoleY) }
-            },
-            vertexShader: document.getElementById('vertexShader').textContent,
-            fragmentShader: document.getElementById('fragmentShader').textContent,
-            transparent: true
+        function createPhotons() {
+            if (photons) scene.remove(photons);
+
+            const geometry = new THREE.BufferGeometry();
+            const positions = new Float32Array(params.photonCount * 3);
+            const colors = new Float32Array(params.photonCount * 3);
+            const velocities = new Float32Array(params.photonCount * 3);
+
+            for (let i = 0; i < params.photonCount; i++) {
+                resetPhoton(i, positions, velocities, colors);
+            }
+
+            geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+            geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+
+            const material = new THREE.PointsMaterial({
+                size: 0.5,
+                vertexColors: true,
+                blending: THREE.AdditiveBlending,
+                transparent: true
+            });
+
+            photons = new THREE.Points(geometry, material);
+            photons.userData.velocities = velocities;
+            scene.add(photons);
+        }
+
+        function createStars() {
+            if (stars) scene.remove(stars);
+
+            const geometry = new THREE.BufferGeometry();
+            const positions = new Float32Array(params.starCount * 3);
+
+            for (let i = 0; i < params.starCount; i++) {
+                positions[i * 3] = (Math.random() - 0.5) * 400;
+                positions[i * 3 + 1] = (Math.random() - 0.5) * 400;
+                positions[i * 3 + 2] = (Math.random() - 0.5) * 400;
+            }
+
+            geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+
+            const material = new THREE.PointsMaterial({
+                color: params.starColor,
+                size: 0.5,
+                transparent: true,
+                opacity: 0.8
+            });
+
+            stars = new THREE.Points(geometry, material);
+            scene.add(stars);
+        }
+
+        function resetPhoton(index, positions, velocities, colors) {
+            const i3 = index * 3;
+            let r, theta, phi, vx, vy, vz;
+
+            r = params.orbitRadius * (0.8 + Math.random() * 0.4);
+            theta = Math.random() * Math.PI * 2;
+            phi = Math.acos(2 * Math.random() - 1);
+
+            if (index < params.photonCount / 3) {
+                // Falling photons
+                setColor(colors, i3, params.fallingPhotonColor);
+                vx = vy = vz = 0; // Initial velocity towards black hole
+            } else if (index < 2 * params.photonCount / 3) {
+                // Orbiting photons
+                setColor(colors, i3, params.orbitingPhotonColor);
+                // Tangential velocity for circular orbit
+                const v = Math.sqrt(1 / Math.max(r, 0.1)) * 0.7;
+                vx = -v * Math.sin(theta);
+                vy = v * Math.cos(theta);
+                vz = 0;
+            } else {
+                // Escaping photons
+                setColor(colors, i3, params.escapingPhotonColor);
+                // Velocity with both radial and tangential components
+                const v = Math.sqrt(2 / Math.max(r, 0.1)) * 0.5;
+                vx = v * Math.cos(theta);
+                vy = v * Math.sin(theta);
+                vz = v * Math.cos(phi);
+            }
+
+            positions[i3] = r * Math.sin(phi) * Math.cos(theta);
+            positions[i3 + 1] = r * Math.sin(phi) * Math.sin(theta);
+            positions[i3 + 2] = r * Math.cos(phi);
+
+            velocities[i3] = vx;
+            velocities[i3 + 1] = vy;
+            velocities[i3 + 2] = vz;
+        }
+
+        function setColor(colors, index, hexColor) {
+            const color = new THREE.Color(hexColor);
+            colors[index] = color.r;
+            colors[index + 1] = color.g;
+            colors[index + 2] = color.b;
+        }
+
+        function updateColors() {
+            const colors = photons.geometry.attributes.color.array;
+            for (let i = 0; i < params.photonCount; i++) {
+                const i3 = i * 3;
+                if (i < params.photonCount / 3) {
+                    setColor(colors, i3, params.fallingPhotonColor);
+                } else if (i < 2 * params.photonCount / 3) {
+                    setColor(colors, i3, params.orbitingPhotonColor);
+                } else {
+                    setColor(colors, i3, params.escapingPhotonColor);
+                }
+            }
+            photons.geometry.attributes.color.needsUpdate = true;
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+
+            const positions = photons.geometry.attributes.position.array;
+            const velocities = photons.userData.velocities;
+
+            for (let i = 0; i < params.photonCount; i++) {
+                const i3 = i * 3;
+                const x = positions[i3];
+                const y = positions[i3 + 1];
+                const z = positions[i3 + 2];
+
+                const distanceSq = x*x + y*y + z*z;
+                const distance = Math.sqrt(distanceSq);
+
+                if (isNaN(distance) || distance < params.blackHoleRadius || distance > params.orbitRadius * 3) {
+                    resetPhoton(i, positions, velocities, photons.geometry.attributes.color.array);
+                    continue;
+                }
+
+                // Update velocity (simplified gravity)
+                const force = params.gravitationalStrength / Math.max(distanceSq, 0.1);
+                velocities[i3] -= force * x / distance * 0.016;
+                velocities[i3 + 1] -= force * y / distance * 0.016;
+                velocities[i3 + 2] -= force * z / distance * 0.016;
+
+                // Update position
+                positions[i3] += velocities[i3];
+                positions[i3 + 1] += velocities[i3 + 1];
+                positions[i3 + 2] += velocities[i3 + 2];
+            }
+
+            photons.geometry.attributes.position.needsUpdate = true;
+
+            // Rotate camera
+            const time = Date.now() * params.cameraSpeed;
+            camera.position.x = Math.cos(time) * params.cameraDistance;
+            camera.position.z = Math.sin(time) * params.cameraDistance;
+            camera.lookAt(scene.position);
+
+            renderer.render(scene, camera);
+        }
+
+        function setupGUI() {
+            const gui = new dat.GUI();
+            gui.add(params, 'photonCount', 1000, 10000).step(100).onChange(createPhotons);
+            gui.add(params, 'blackHoleRadius', 1, 20).onChange(value => {
+                blackHole.scale.setScalar(value / 5);
+            });
+            gui.add(params, 'orbitRadius', 10, 50).onChange(createPhotons);
+            gui.add(params, 'cameraDistance', 50, 200);
+            gui.add(params, 'cameraSpeed', 0, 0.002);
+            gui.add(params, 'gravitationalStrength', 10, 500);
+            gui.addColor(params, 'fallingPhotonColor').onChange(updateColors);
+            gui.addColor(params, 'orbitingPhotonColor').onChange(updateColors);
+            gui.addColor(params, 'escapingPhotonColor').onChange(updateColors);
+            gui.addColor(params, 'starColor').onChange(value => {
+                stars.material.color.setHex(parseInt(value.replace('#', '0x')));
+            });
+            gui.add(params, 'showBlackHole').onChange(value => {
+                blackHole.visible = value;
+            });
+        }
+
+        init();
+
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
         });
-
-        particles = new THREE.Points(geometry, material);
-        scene.add(particles);
-    }
-
-    function createBlackHoleIndicator() {
-        const geometry = new THREE.CircleGeometry(1, 32);
-        const material = new THREE.MeshBasicMaterial({ color: 0x000000 });
-        blackHoleMesh = new THREE.Mesh(geometry, material);
-        scene.add(blackHoleMesh);
-    }
-
-    function setupGUI() {
-        gui = new dat.GUI();
-        gui.add(params, 'blackHoleStrength', 0, 100).onChange(updateUniforms);
-        gui.add(params, 'blackHoleX', -50, 50).onChange(updateUniforms);
-        gui.add(params, 'blackHoleY', -50, 50).onChange(updateUniforms);
-    }
-
-    function updateUniforms() {
-        particles.material.uniforms.blackHoleStrength.value = params.blackHoleStrength;
-        particles.material.uniforms.blackHolePosition.value.set(params.blackHoleX, params.blackHoleY);
-        blackHoleMesh.position.set(params.blackHoleX, params.blackHoleY, 0);
-    }
-
-    function animate() {
-        requestAnimationFrame(animate);
-        particles.material.uniforms.time.value += 0.01;
-        renderer.render(scene, camera);
-    }
-
-    init();
-
-    window.addEventListener('resize', () => {
-        camera.aspect = window.innerWidth / window.innerHeight;
-        camera.updateProjectionMatrix();
-        renderer.setSize(window.innerWidth, window.innerHeight);
-    });
-</script>
+    </script>
 </body>
 </html>
